@@ -55,8 +55,12 @@ def print_report(df: pd.DataFrame, results: dict):
     print(f"  - 胨:     {results['ucb']['x'][1]:.1f} g/L")
     print(f"  - KH2PO4: {results['ucb']['x'][2]:.1f} g/L")
     print()
+    ucb_val = results['ucb']['ucb']
+    delta = ucb_val - max_obs
+    relation = (f"高于实测最高值 {max_obs:.3f} (+{delta:.3f})" if delta > 0
+                else f"低于实测最高值 {max_obs:.3f} ({delta:+.3f})")
     print("性能指标:")
-    print(f"  - UCB值:    {results['ucb']['ucb']:.3f}  (超越实测最高值 {max_obs:.3f})")
+    print(f"  - UCB值:    {ucb_val:.3f}  ({relation})")
     print(f"  - 置信度:   99%  (κ={KAPPA_99})")
 
 
