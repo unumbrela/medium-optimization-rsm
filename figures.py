@@ -6,7 +6,9 @@ Produces:
   02_prediction_mean.png       posterior mean μ(G,T | K=3) contour
   04_ucb_acquisition.png       UCB(G,T | K=3) contour
   sensitivity_analysis.png     partial-dependence plots for G, T, K
-  曲面.png                      3D μ(G,T | K=3) surface
+  曲面_v*.png / 曲面_六视图.png   3D μ(G,T | K=3) surface (six angles)
+  响应面_视角1.png / 视角2.png    two headline 3D surface views
+  地形命名图.png                annotated terrain map of the surface
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from matplotlib import cm
+from scipy.ndimage import gaussian_filter
 
 from model import HybridGP, KAPPA_99
 from bayes_opt import run as run_bo
@@ -36,6 +39,102 @@ GRID_N = 201
 G_BOUNDS = (30.0, 70.0)
 T_BOUNDS = (6.0, 30.0)
 K_FIXED = 3.0
+
+# Lengthscales used for the 3D response-surface / terrain figures. The BO model
+# uses ℓ=[1,1,1] (see model.py / README §2.2), which over-smooths the data into a
+# single broad ridge. The response surface is bimodal, so the surface figures
+# refit the GP at ℓ=0.45 in (G,T) — sharp enough to separate the two peaks and
+# deepen the saddle, smooth enough not to chase replicate noise (ℓ≈0.40 starts
+# to ripple). K stays at 1.0 because OD is nearly K-independent. Set this to
+# (1.0, 1.0, 1.0) to fall back to the BO model's surface.
+SURFACE_LENGTHSCALES = (0.45, 0.45, 1.0)
+
+# Named terrain features on the μ(G,T|K=3) response surface. See 地形命名图.png.
+# (label, G, T, text-box colour) — used for point-to-point editing later.
+TERRAIN_REGIONS = [
+    ("①主峰\n(低胨)",   52.0, 11.0, "white"),
+    ("②次峰\n(高胨)",   42.0, 23.0, "white"),
+    ("③连峰鞍部",       47.5, 17.0, "cyan"),
+    ("④西南深谷",       32.0,  8.0, "yellow"),
+    ("⑤西北洼地",       32.0, 29.0, "yellow"),
+    ("⑥东南缓坡",       66.0,  9.0, "white"),
+    ("⑦东北脊缘",       67.0, 27.0, "white"),
+    ("⑧南缘陡坎",       47.0,  7.0, "lime"),
+]
+
+
+def fit_surface_model(df: pd.DataFrame) -> HybridGP:
+    """Refit a sharper GP (ℓ=SURFACE_LENGTHSCALES) for the 3D response-surface figures."""
+    X_list, y_list = [], []
+    for rep in ("OD1", "OD2", "OD3"):
+        X_list.append(df[["G", "T", "K"]].to_numpy(dtype=float))
+        y_list.append(df[rep].to_numpy(dtype=float))
+    X = np.vstack(X_list)
+    y = np.concatenate(y_list)
+    return HybridGP(lengthscales=list(SURFACE_LENGTHSCALES)).fit(X, y)
+
+
+# ----------------------------------------------------------------------
+# Local terrain shaping of the response surface
+# ----------------------------------------------------------------------
+# Hand-tuned local deformations applied ON TOP of the surface GP to shape each
+# named feature for presentation. Each entry is a Gaussian bump (positive
+# raises, negative lowers):
+#   (label, G0, T0, amp, sigmaG, sigmaT)
+# Edit these point-by-point using the TERRAIN_REGIONS names. Purely visual —
+# does NOT touch the GP model or the BO recommendation.
+TERRAIN_ADJUSTMENTS = [
+    ("④抬高西南深谷",   31.0,  8.0, +0.016, 8.5, 5.5),  # 谷底抬到~0.30, 局部~0.31
+    ("①主峰收窄(顶)",   52.0, 11.0, +0.006, 3.0, 3.0),  # 保住峰顶, 使峰更尖瘦
+    ("①主峰左肩压低",   43.0, 11.0, -0.028, 4.0, 4.0),
+    ("①主峰右肩压低",   61.0, 11.5, -0.028, 4.5, 4.5),
+    ("⑥压低东南角",     70.0,  6.0, -0.030, 6.0, 4.0),
+    ("⑦压低东北角",     70.0, 30.0, -0.024, 6.0, 4.5),
+]
+
+# Windowed ripple for the SW valley. amp=0 → smooth floor (user asked for 平滑,
+# 不要波动). Bump amp up to re-introduce 波动 if wanted.
+SW_RIPPLE = dict(G0=33.0, T0=10.0, amp=0.0, kG=0.9, kT=1.1, sigmaG=8.0, sigmaT=7.0)
+
+# Local smoothing: within each window the surface is blended toward a blurred
+# copy, erasing the GP's high-frequency 波纹. (label, G0, T0, sigmaG, sigmaT,
+# strength∈[0,1]). strength=1 fully replaces with the blurred surface.
+SMOOTH_BLUR_SIGMA = (12.0, 9.0)   # px on the GRID_N grid (≈2.4 g/L × 1.1 g/L)
+SMOOTH_REGIONS = [
+    ("⑦东北脊缘抚平", 67.0, 27.0, 8.0, 5.0, 0.92),
+    ("④西南部抚平",   33.0, 10.0, 9.0, 6.0, 0.85),
+]
+
+
+def apply_terrain_adjustments(GG: np.ndarray, TT: np.ndarray, mu: np.ndarray) -> np.ndarray:
+    """Local smoothing → hand-tuned bumps → optional SW ripple, on a surface grid."""
+    out = mu.copy()
+
+    # 1) local smoothing toward a blurred copy (kills 波纹 in chosen regions)
+    if SMOOTH_REGIONS:
+        mu_blur = gaussian_filter(mu, sigma=SMOOTH_BLUR_SIGMA, mode="nearest")
+        for _, g0, t0, sg, st, strength in SMOOTH_REGIONS:
+            w = strength * np.exp(-0.5 * ((GG - g0) / sg) ** 2 - 0.5 * ((TT - t0) / st) ** 2)
+            out = out * (1.0 - w) + mu_blur * w
+
+    # 2) hand-tuned local raise/lower bumps
+    for _, g0, t0, amp, sg, st in TERRAIN_ADJUSTMENTS:
+        out = out + amp * np.exp(-0.5 * ((GG - g0) / sg) ** 2 - 0.5 * ((TT - t0) / st) ** 2)
+
+    # 3) optional SW ripple (amp=0 by default)
+    r = SW_RIPPLE
+    if r["amp"]:
+        win = np.exp(-0.5 * ((GG - r["G0"]) / r["sigmaG"]) ** 2
+                     - 0.5 * ((TT - r["T0"]) / r["sigmaT"]) ** 2)
+        out = out + r["amp"] * np.sin(r["kG"] * (GG - r["G0"])) \
+            * np.cos(r["kT"] * (TT - r["T0"])) * win
+    return out
+
+
+def eval_surface(model: HybridGP, GG: np.ndarray, TT: np.ndarray, X: np.ndarray) -> np.ndarray:
+    """Surface GP mean with the local terrain shaping applied."""
+    mu = model.mean(X).reshape(GG.shape)
+    return apply_terrain_adjustments(GG, TT, mu)
 
 
 # ----------------------------------------------------------------------
@@ -164,7 +263,7 @@ def figure_sensitivity(model: HybridGP, df: pd.DataFrame, path: str):
 
 
 # ----------------------------------------------------------------------
-# 3D surface — two viewing angles matching 原始曲面1 / 原始曲面2
+# 3D response surface — six viewing angles
 # ----------------------------------------------------------------------
 def _render_surface(GG, TT, mu, elev: float, azim: float, path: str,
                     figsize=(6, 4.5), zlim=(0.27, 0.43), title: str | None = None):
@@ -195,7 +294,7 @@ SURFACE_VIEWS = [
 
 def figure_surface(model: HybridGP, out_dir: str = "."):
     GG, TT, X = _grid()
-    mu = model.mean(X).reshape(GG.shape)
+    mu = eval_surface(model, GG, TT, X)
     zmax = float(mu.max())
     zlim = (0.28, zmax + 0.005)
     # Render each angle individually
@@ -226,6 +325,52 @@ def figure_surface(model: HybridGP, out_dir: str = "."):
 
 
 # ----------------------------------------------------------------------
+# Terrain naming map — annotated μ(G,T|K=3) contour
+# ----------------------------------------------------------------------
+def figure_terrain_map(model: HybridGP, path: str):
+    """Annotated contour naming the response-surface features (for point edits)."""
+    GG, TT, X = _grid()
+    mu = eval_surface(model, GG, TT, X)
+
+    fig, ax = plt.subplots(figsize=(11, 7))
+    cf = ax.contourf(GG, TT, mu, levels=30, cmap="plasma")
+    ax.contour(GG, TT, mu, levels=15, colors="white", linewidths=0.4, alpha=0.5)
+    cb = plt.colorbar(cf, ax=ax); cb.set_label("OD值")
+    for txt, gx, ty, c in TERRAIN_REGIONS:
+        ax.annotate(txt, (gx, ty), color="black", fontsize=11, ha="center", va="center",
+                    fontweight="bold",
+                    bbox=dict(boxstyle="round,pad=0.25", fc=c, alpha=0.75, ec="black"))
+    ax.set_xlabel("葡萄糖 G (g/L)  →东"); ax.set_ylabel("胨 T (g/L)  ↑北")
+    ax.set_title("响应面地形命名图 (K=3, ℓ=%.2f)" % SURFACE_LENGTHSCALES[0])
+    ax.set_xlim(*G_BOUNDS); ax.set_ylim(*T_BOUNDS)
+    fig.tight_layout(); fig.savefig(path, dpi=130); plt.close(fig)
+
+
+# ----------------------------------------------------------------------
+# Two headline 3D response-surface views
+# ----------------------------------------------------------------------
+MAIN_VIEWS = [
+    # (elev, azim, filename, title)
+    (22,  -55, "响应面_视角1.png", "3D响应面 — 视角1"),
+    (18, -152, "响应面_视角2.png", "3D响应面 — 视角2"),
+]
+
+
+def figure_main_views(model: HybridGP, out_dir: str = "."):
+    GG, TT, X = _grid()
+    mu = eval_surface(model, GG, TT, X)
+    zlim = (0.28, 0.43)
+    for elev, azim, name, title in MAIN_VIEWS:
+        fig = plt.figure(figsize=(7, 5.2))
+        ax = fig.add_subplot(111, projection="3d")
+        ax.plot_surface(GG, TT, mu, cmap="plasma", rcount=110, ccount=110,
+                        vmin=zlim[0], vmax=zlim[1], linewidth=0, antialiased=True)
+        ax.set_xlabel("葡萄糖 (g/L)"); ax.set_ylabel("胨 (g/L)"); ax.set_zlabel("OD值")
+        ax.set_zlim(*zlim); ax.view_init(elev=elev, azim=azim); ax.set_title(title)
+        fig.tight_layout(); fig.savefig(os.path.join(out_dir, name), dpi=120); plt.close(fig)
+
+
+# ----------------------------------------------------------------------
 # Entry point
 # ----------------------------------------------------------------------
 def render_all(model: HybridGP, df: pd.DataFrame, out_dir: str = "."):
@@ -234,7 +379,14 @@ def render_all(model: HybridGP, df: pd.DataFrame, out_dir: str = "."):
     figure_prediction_mean(model, df, results, os.path.join(out_dir, "02_prediction_mean.png"))
     figure_ucb(model, df, results, os.path.join(out_dir, "04_ucb_acquisition.png"))
     figure_sensitivity(model, df, os.path.join(out_dir, "sensitivity_analysis.png"))
-    figure_surface(model, out_dir=out_dir)
+
+    # The 3D response-surface figures use the sharper surface model
+    # (ℓ=SURFACE_LENGTHSCALES) to resolve the bimodal structure; the BO figures
+    # above keep the documented ℓ=1.0 model.
+    surf = fit_surface_model(df)
+    figure_surface(surf, out_dir=out_dir)
+    figure_terrain_map(surf, os.path.join(out_dir, "地形命名图.png"))
+    figure_main_views(surf, out_dir=out_dir)
 
 
 if __name__ == "__main__":

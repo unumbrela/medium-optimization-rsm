@@ -4,3 +4,9 @@ __pycache__/
 .vscode/
 .idea/
 .DS_Store
+
+# 复原源文件 / 参考报告：保留本地，不入库
+原始曲面1.png
+原始曲面2.png
+原始sensitivity_analysis.png
+CytoGuard_Medium.pdf

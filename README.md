@@ -3,7 +3,7 @@
 > 用 **二次响应面 + 高斯过程残差** 的混合代理模型，配合 **双获取函数 (Mean / UCB) 的贝叶斯优化**，
 > 在 G (葡萄糖) / T (胨) / K (KH₂PO₄) 三维成分空间内寻找使 OD 最大化的最优配方。
 
-本项目参考 *CytoGuard_Medium* 报告的方法学，独立实现了一套可端到端运行的最小化代码 (≈ 300 行)，
+本项目基于响应面方法学，独立实现了一套可端到端运行的最小化代码 (≈ 300 行)，
 不依赖 sklearn / GPy / GPyTorch 等任何高斯过程库，所有数学公式都直接以 NumPy 写出，便于阅读和二次开发。
 
 > **范围说明**：本仓库实现的是贝叶斯优化的 **内循环** —— 在已有 228 × 3 实验数据上拟合一次 GP，
@@ -149,8 +149,7 @@ Max observed OD (data): 0.427
 ├── figures.py            # 图表绘制
 ├── main.py               # 端到端入口
 ├── requirements.txt
-├── CytoGuard_Medium.pdf  # 参考方法学报告 (原文)
-└── 01_*.png / 02_*.png / 04_*.png / 曲面_*.png / sensitivity_*.png
+└── 01_*.png / 02_*.png / 04_*.png / 曲面_*.png / 响应面_*.png / 地形命名图.png / sensitivity_*.png
 ```
 
 ---
@@ -158,8 +157,8 @@ Max observed OD (data): 0.427
 ## 5. 快速开始
 
 ```bash
-git clone https://github.com/unumbrela/Medium-optim.git
-cd Medium-optim
+git clone https://github.com/unumbrela/medium-optimization-rsm.git
+cd medium-optimization-rsm
 pip install -r requirements.txt
 python main.py
 ```
@@ -182,4 +181,4 @@ python main.py
 
 ## 7. 致谢
 
-方法学参考自 `CytoGuard_Medium.pdf`。本仓库为独立实现的最小化版本，便于阅读与二次开发。
+本仓库为响应面 + 贝叶斯优化方法的独立最小化实现，便于阅读与二次开发。
