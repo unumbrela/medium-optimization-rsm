@@ -1,160 +1,167 @@
-# Medium-optim — 基于混合建模与贝叶斯优化的培养基智能设计
+# Medium-Optim — Culture-Medium Design via Hybrid Surrogate Modelling and Bayesian Optimization
 
-> 用 **二次响应面 + 高斯过程残差** 的混合代理模型，配合 **双获取函数 (Mean / UCB) 的贝叶斯优化**，
-> 在 G (葡萄糖) / T (胨) / K (KH₂PO₄) 三维成分空间内寻找使 OD 最大化的最优配方。
+**English** | [中文](README.zh-CN.md)
 
-本项目基于响应面方法学，独立实现了一套可端到端运行的最小化代码 (≈ 300 行)，
-不依赖 sklearn / GPy / GPyTorch 等任何高斯过程库，所有数学公式都直接以 NumPy 写出，便于阅读和二次开发。
+> A **quadratic response surface + Gaussian-process residual** hybrid surrogate, driven by
+> **dual-acquisition (Mean / UCB) Bayesian optimization**, to find the recipe that maximizes
+> OD across the three-component space of G (glucose), T (peptone) and K (KH₂PO₄).
 
-> **范围说明**：本仓库实现的是贝叶斯优化的 **内循环** —— 在已有 228 × 3 实验数据上拟合一次 GP，
-> 求获取函数的 argmax，给出 *下一个最值得做的实验配方*。
-> 完整的迭代 BO（拟合 → 取点 → 真实评估 → 更新数据 → 再拟合）需要把这套代码包在一个外层循环里。
+This project is a self-contained, end-to-end minimal implementation of response-surface
+methodology (≈ 300 lines). It depends on no Gaussian-process library (no sklearn / GPy /
+GPyTorch); every formula is written directly in NumPy for readability and easy extension.
+
+> **Scope.** This repository implements the **inner loop** of Bayesian optimization: fit one GP
+> on the existing 228 × 3 experimental dataset, take the argmax of the acquisition function, and
+> return the *single most worthwhile next experiment*. A full iterative BO loop (fit → propose →
+> evaluate → augment data → refit) wraps this code in an outer loop.
 
 ---
 
-## 1. 问题描述
+## 1. Problem statement
 
-| 变量 | 含义 | 范围 |
+| Variable | Meaning | Range |
 |---|---|---|
-| G  | 葡萄糖浓度 | 30 – 70 g/L |
-| T  | 胨浓度     | 6 – 30 g/L |
-| K  | KH₂PO₄ 浓度 | 1 – 5 g/L (固定 K = 3) |
-| OD | 光学密度 (目标变量) | 越大越好 |
+| G  | Glucose concentration | 30 – 70 g/L |
+| T  | Peptone concentration | 6 – 30 g/L |
+| K  | KH₂PO₄ concentration | 1 – 5 g/L (fixed at K = 3) |
+| OD | Optical density (objective) | larger is better |
 
-数据集：228 个唯一设计点 × 3 次生物学重复，共 684 条观测，见 `data.csv`。
+Dataset: 228 unique design points × 3 biological replicates = 684 observations (`data.csv`).
 
-优化目标：
+Optimization objective:
 
 $$
-\mathbf{x}^{\star} \;=\; \arg\max_{\mathbf{x}\in\mathcal{X}}\; f(\mathbf{x}),
-\qquad \mathcal{X}=[30,70]\times[6,30],\; K=3
+\mathbf{x}^{\star} = \arg\max_{\mathbf{x}\in\mathcal{X}} f(\mathbf{x}),
+\qquad \mathcal{X}=[30,70]\times[6,30],\ K=3
 $$
 
 ---
 
-## 2. 方法学
+## 2. Methodology
 
-### 2.1 全局趋势：二次响应面
+### 2.1 Global trend: quadratic response surface
 
-特征矩阵（10 维）：
-
-$$
-\mathbf{X} = \bigl[\,1,\;G,\;T,\;K,\;G^{2},\;T^{2},\;K^{2},\;GT,\;GK,\;TK\,\bigr]
-$$
-
-岭回归估计：
+Feature matrix (10 dimensions):
 
 $$
-\boldsymbol{\beta} = (\mathbf{X}^{\!\top}\mathbf{X} + \lambda\mathbf{I})^{-1}\mathbf{X}^{\!\top}\mathbf{y},\qquad \lambda = 10^{-8}
+\mathbf{X} = [\,1,\ G,\ T,\ K,\ G^{2},\ T^{2},\ K^{2},\ GT,\ GK,\ TK\,]
 $$
 
-得到趋势项 $f_{\text{trend}}(\mathbf{x}) = \boldsymbol{\Phi}(\mathbf{x})\boldsymbol{\beta}$。
-
-### 2.2 局部偏差：高斯过程残差
-
-残差 $r_i = y_i - f_{\text{trend}}(\mathbf{x}_i)$ 用各向异性 RBF 核建模：
+Ridge-regression estimate:
 
 $$
-k(\mathbf{x}_i,\mathbf{x}_j) = \sigma_f^{2}\,\exp\!\Bigl(-\tfrac{1}{2}\sum_{d=1}^{3}\tfrac{(x_{i,d}-x_{j,d})^{2}}{\ell_{d}^{2}}\Bigr)
+\boldsymbol{\beta} = (\mathbf{X}^{\top}\mathbf{X} + \lambda\mathbf{I})^{-1}\mathbf{X}^{\top}\mathbf{y},
+\qquad \lambda = 10^{-8}
 $$
 
-超参数（按数据自适应）：
+giving the trend term $f_{\mathrm{trend}}(\mathbf{x}) = \boldsymbol{\Phi}(\mathbf{x})\boldsymbol{\beta}$.
 
-- $\sigma_f = \max\!\bigl(10^{-6},\, \mathrm{std}(r)\bigr)$ &nbsp;&nbsp; 信号幅度
-- $\sigma_n = \max\!\bigl(10^{-6},\, 0.02\cdot \mathrm{range}(y)\bigr)$ &nbsp;&nbsp; 噪声幅度
-- $\ell_1=\ell_2=\ell_3=1.0$ &nbsp;&nbsp; (在标准化输入空间)
+### 2.2 Local correction: Gaussian process on residuals
 
-后验预测分布：
+The residuals $r_i = y_i - f_{\mathrm{trend}}(\mathbf{x}_i)$ are modelled with an anisotropic RBF kernel:
 
 $$
-\mu(\mathbf{x}^{\!\ast}) = f_{\text{trend}}(\mathbf{x}^{\!\ast}) + \mathbf{k}_{\!\ast}^{\!\top}\bigl(\mathbf{K}+\sigma_n^{2}\mathbf{I}\bigr)^{-1}\mathbf{r}
+k(\mathbf{x}_i,\mathbf{x}_j) = \sigma_f^{2}\exp\left(-\frac{1}{2}\sum_{d=1}^{3}\frac{(x_{i,d}-x_{j,d})^{2}}{\ell_{d}^{2}}\right)
+$$
+
+Hyperparameters (adapted to the data):
+
+- $\sigma_f = \max(10^{-6},\ \mathrm{std}(r))$ — signal amplitude
+- $\sigma_n = \max(10^{-6},\ 0.02\cdot\mathrm{range}(y))$ — noise amplitude
+- $\ell_1=\ell_2=\ell_3=1.0$ — in standardized input space
+
+Posterior predictive distribution:
+
+$$
+\mu(\mathbf{x}_{\ast}) = f_{\mathrm{trend}}(\mathbf{x}_{\ast}) + \mathbf{k}_{\ast}^{\top}(\mathbf{K}+\sigma_n^{2}\mathbf{I})^{-1}\mathbf{r}
 $$
 
 $$
-\sigma^{2}(\mathbf{x}^{\!\ast}) = k(\mathbf{x}^{\!\ast},\mathbf{x}^{\!\ast}) - \mathbf{k}_{\!\ast}^{\!\top}\bigl(\mathbf{K}+\sigma_n^{2}\mathbf{I}\bigr)^{-1}\mathbf{k}_{\!\ast}
+\sigma^{2}(\mathbf{x}_{\ast}) = k(\mathbf{x}_{\ast},\mathbf{x}_{\ast}) - \mathbf{k}_{\ast}^{\top}(\mathbf{K}+\sigma_n^{2}\mathbf{I})^{-1}\mathbf{k}_{\ast}
 $$
 
-为了数值稳定，对 $\mathbf{K}+\sigma_n^{2}\mathbf{I}$ 增加 $10^{-12}$ 抖动后做 Cholesky 分解。
+For numerical stability, a $10^{-12}$ jitter is added to $\mathbf{K}+\sigma_n^{2}\mathbf{I}$ before Cholesky factorization.
 
-### 2.3 双获取函数
+### 2.3 Dual acquisition functions
 
-| 策略 | 公式 | 取向 |
+| Strategy | Formula | Behaviour |
 |---|---|---|
-| **Mean** (开发) | $\alpha_{\text{Mean}}(\mathbf{x}) = \mu(\mathbf{x})$ | 在已确定区域精挑 |
-| **UCB** (探索) | $\alpha_{\text{UCB}}(\mathbf{x}) = \mu(\mathbf{x}) + \kappa\sigma(\mathbf{x})$, &nbsp; $\kappa=2.58$ (99 %) | 给不确定区域留一线生机 |
+| **Mean** (exploit) | $\alpha_{\mathrm{Mean}}(\mathbf{x}) = \mu(\mathbf{x})$ | refine within confident regions |
+| **UCB** (explore) | $\alpha_{\mathrm{UCB}}(\mathbf{x}) = \mu(\mathbf{x}) + \kappa\sigma(\mathbf{x})$, with $\kappa=2.58$ (99%) | keep uncertain regions in play |
 
-### 2.4 优化器
+### 2.4 Optimizer
 
-**L-BFGS-B + 10 次拉丁超立方随机重启**，盒约束 $G\!\in\![30,70]$, $T\!\in\![6,30]$。
+**L-BFGS-B with 10 random restarts**, box-constrained to $G\in[30,70]$, $T\in[6,30]$.
 
-理论复杂度：网格搜索 $\mathcal{O}(N^{2}n)$ vs 贝叶斯优化 $\mathcal{O}(k\cdot m \cdot n)$，约 **100× 加速**。
+Theoretical complexity: grid search $\mathcal{O}(N^{2}n)$ vs. Bayesian optimization $\mathcal{O}(k\cdot m\cdot n)$ — roughly a **100× speed-up**.
 
 ---
 
-## 3. 运行结果
+## 3. Results
 
 ```text
 === Bayesian Optimization Results (K=3) ===
 Max observed OD (data): 0.427
 
-双获取函数策略比较:
-| 策略         | 最优位置               | 预测均值     | UCB值     |
-| mean argmax | (42.38, 23.22)     | 0.424    | 0.426    |
-| ucb argmax  | (42.63, 23.19)     | 0.424    | 0.426    |
+Dual-acquisition strategy comparison:
+| Strategy    | Optimal location   | Pred. mean | UCB value |
+| mean argmax | (42.38, 23.22)     | 0.424      | 0.426     |
+| ucb argmax  | (42.63, 23.19)     | 0.424      | 0.426     |
 
-最终推荐配方 (UCB策略):
-  - 葡萄糖: 42.6 g/L
-  - 胨:     23.2 g/L
-  - KH2PO4: 3.0 g/L
+Final recommended recipe (UCB strategy):
+  - Glucose: 42.6 g/L
+  - Peptone: 23.2 g/L
+  - KH2PO4:  3.0 g/L
 
-性能指标:
-  - UCB值:    0.426  (超越实测最高值 0.427)
-  - 置信度:   99%  (κ=2.58)
+Performance:
+  - UCB value: 0.426
+  - Confidence: 99% (kappa=2.58)
 ```
 
-> 推荐 **G ≈ 42.6 g/L · T ≈ 23.2 g/L · K = 3 g/L**，C/N 比约 1.83 ——
-> 葡萄糖避免过高产生抑制效应，胨提供充足氮源和生长因子，KH₂PO₄ 中等浓度维持 pH 缓冲。
+> Recommended: **G ≈ 42.6 g/L · T ≈ 23.2 g/L · K = 3 g/L**, a C/N ratio of about 1.83 —
+> glucose stays below inhibitory levels, peptone supplies ample nitrogen and growth factors,
+> and a moderate KH₂PO₄ concentration maintains pH buffering.
 
-### 3.1 实验数据分布与最优点
+### 3.1 Data distribution and optima
 
 ![data distribution](01_data_distribution.png)
 
-228 个设计点按实测 OD 着色，红/橙星标为 Mean 与 UCB 的 argmax。
+The 228 design points are coloured by measured OD; the red/orange stars mark the Mean and UCB argmax.
 
-### 3.2 GP 后验均值面 $\mu(G,T\!\mid\!K\!=\!3)$
+### 3.2 GP posterior mean surface $\mu(G,T\mid K=3)$
 
 ![prediction mean](02_prediction_mean.png)
 
-### 3.3 UCB 采集面 $\mu(G,T) + 2.58\,\sigma(G,T)$
+### 3.3 UCB acquisition surface $\mu(G,T) + 2.58\,\sigma(G,T)$
 
 ![ucb surface](04_ucb_acquisition.png)
 
-### 3.4 三维响应面（六视图）
+### 3.4 Three-dimensional response surface (six views)
 
 ![surface](曲面_六视图.png)
 
-### 3.5 单变量 Partial Dependence
+### 3.5 Univariate partial dependence
 
 ![sensitivity](sensitivity_analysis.png)
 
 ---
 
-## 4. 文件结构
+## 4. File layout
 
 ```
 .
-├── data.csv              # 228 × 3 重复 实测数据
-├── model.py              # 二次响应面 + 高斯过程残差 (HybridGP)
-├── bayes_opt.py          # L-BFGS-B + 多重启 贝叶斯优化
-├── figures.py            # 图表绘制
-├── main.py               # 端到端入口
+├── data.csv              # 228 design points × 3 replicates (measured)
+├── model.py              # Quadratic trend + GP residual (HybridGP)
+├── bayes_opt.py          # L-BFGS-B + multi-restart Bayesian optimization
+├── figures.py            # Plotting
+├── main.py               # End-to-end entry point
 ├── requirements.txt
-└── 01_*.png / 02_*.png / 04_*.png / 曲面_*.png / 响应面_*.png / 地形命名图.png / sensitivity_*.png
+└── *.png                 # Generated figures
 ```
 
 ---
 
-## 5. 快速开始
+## 5. Quick start
 
 ```bash
 git clone https://github.com/unumbrela/medium-optimization-rsm.git
@@ -163,22 +170,23 @@ pip install -r requirements.txt
 python main.py
 ```
 
-运行后控制台打印优化结果，并在当前目录重新生成全部图。
+The optimization results are printed to the console, and all figures are regenerated in the working directory.
 
 ---
 
-## 6. 设计要点
+## 6. Design notes
 
-| 设计 | 理由 |
+| Choice | Rationale |
 |---|---|
-| **趋势 + 残差 双层建模** | 二次项捕获全局抛物面 (低方差有偏)，GP 捕获局部非线性 (高方差无偏)，组合达到偏差‑方差最佳 |
-| **κ = 2.58** | 对应 99 % 单侧置信带，给探索留出空间但不至于完全乱跑 |
-| **L-BFGS-B + 10 重启** | 二阶曲率信息收敛快；多重启覆盖 95 % 以上局部最优，且边际收益在 10 次后递减 |
-| **输入标准化** | 直接在原始量纲下取 $\ell=1$ 几乎等于无平滑；先 z-score 再用单位长度尺度更合理 |
-| **Cholesky + jitter** | 解 $(\mathbf{K}+\sigma_n^{2}\mathbf{I})^{-1}$ 比直接求逆更稳，且数值上自带正定保证 |
+| **Trend + residual two-layer model** | The quadratic term captures the global paraboloid (low-variance, biased); the GP captures local nonlinearity (high-variance, unbiased); together they hit a good bias–variance trade-off |
+| **κ = 2.58** | Corresponds to a 99% one-sided confidence band — leaves room for exploration without wandering aimlessly |
+| **L-BFGS-B + 10 restarts** | Second-order curvature converges fast; multiple restarts cover the great majority of local optima, with marginal returns diminishing past 10 |
+| **Input standardization** | Using $\ell=1$ in raw units would mean almost no smoothing; z-scoring first, then a unit lengthscale, is far more sensible |
+| **Cholesky + jitter** | Solving against $\mathbf{K}+\sigma_n^{2}\mathbf{I}$ is more stable than explicit inversion and is numerically positive-definite by construction |
 
 ---
 
-## 7. 致谢
+## 7. Acknowledgement
 
-本仓库为响应面 + 贝叶斯优化方法的独立最小化实现，便于阅读与二次开发。
+A self-contained, minimal implementation of response-surface methodology plus Bayesian
+optimization, intended to be read and extended.
