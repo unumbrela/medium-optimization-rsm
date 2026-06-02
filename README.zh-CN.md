@@ -118,27 +118,11 @@ Max observed OD (data): 0.427
 > 推荐 **G ≈ 42.6 g/L · T ≈ 23.2 g/L · K = 3 g/L**，C/N 比约 1.83 ——
 > 葡萄糖避免过高产生抑制效应，胨提供充足氮源和生长因子，KH₂PO₄ 中等浓度维持 pH 缓冲。
 
-### 3.1 实验数据分布与最优点
+### 3.1 三维响应面
 
-![data distribution](01_data_distribution.png)
+![response surface](曲面_v1_前向.png)
 
-228 个设计点按实测 OD 着色，红/橙星标为 Mean 与 UCB 的 argmax。
-
-### 3.2 GP 后验均值面 $\mu(G,T\mid K=3)$
-
-![prediction mean](02_prediction_mean.png)
-
-### 3.3 UCB 采集面 $\mu(G,T) + 2.58\,\sigma(G,T)$
-
-![ucb surface](04_ucb_acquisition.png)
-
-### 3.4 三维响应面（六视图）
-
-![surface](曲面_六视图.png)
-
-### 3.5 单变量 Partial Dependence
-
-![sensitivity](sensitivity_analysis.png)
+K = 3 时拟合得到的 OD 在 (G, T) 平面上的响应面。
 
 ---
 
@@ -152,7 +136,7 @@ Max observed OD (data): 0.427
 ├── figures.py            # 图表绘制
 ├── main.py               # 端到端入口
 ├── requirements.txt
-└── *.png                 # 生成的图表
+└── 曲面_v1_前向.png       # 响应面图
 ```
 
 ---

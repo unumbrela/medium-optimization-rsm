@@ -122,27 +122,11 @@ Performance:
 > glucose stays below inhibitory levels, peptone supplies ample nitrogen and growth factors,
 > and a moderate KH₂PO₄ concentration maintains pH buffering.
 
-### 3.1 Data distribution and optima
+### 3.1 Three-dimensional response surface
 
-![data distribution](01_data_distribution.png)
+![response surface](曲面_v1_前向.png)
 
-The 228 design points are coloured by measured OD; the red/orange stars mark the Mean and UCB argmax.
-
-### 3.2 GP posterior mean surface $\mu(G,T\mid K=3)$
-
-![prediction mean](02_prediction_mean.png)
-
-### 3.3 UCB acquisition surface $\mu(G,T) + 2.58\,\sigma(G,T)$
-
-![ucb surface](04_ucb_acquisition.png)
-
-### 3.4 Three-dimensional response surface (six views)
-
-![surface](曲面_六视图.png)
-
-### 3.5 Univariate partial dependence
-
-![sensitivity](sensitivity_analysis.png)
+The fitted OD surface over the (G, T) plane at K = 3.
 
 ---
 
@@ -156,7 +140,7 @@ The 228 design points are coloured by measured OD; the red/orange stars mark the
 ├── figures.py            # Plotting
 ├── main.py               # End-to-end entry point
 ├── requirements.txt
-└── *.png                 # Generated figures
+└── 曲面_v1_前向.png       # Response-surface figure
 ```
 
 ---
